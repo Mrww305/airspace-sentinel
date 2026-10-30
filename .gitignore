@@ -1,0 +1,39 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# builds
+dist/
+build/
+*.tsbuildinfo
+
+# model weights (sha256-pinned, fetched at build — never committed)
+models/*.onnx
+models/*.pt
+models/*.pth
+models/*.engine
+models/*.bin
+
+# datasets & training artefacts
+data/
+datasets/
+runs/
+wandb/
+*.log
+kaggle/
+
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# audit output
+audit/*.jsonl
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc

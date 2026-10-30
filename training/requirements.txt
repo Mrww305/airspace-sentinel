@@ -1,0 +1,9 @@
+# Training pipeline dependencies (Kaggle: torch + CUDA preinstalled)
+rfdetr==1.11.2
+kagglehub>=0.3.0
+onnx>=1.17.0
+onnxruntime>=1.20.0
+torchmetrics>=1.4.0
+supervision>=0.29.0
+pillow>=10.0.0
+numpy>=1.26.0

@@ -1,0 +1,7 @@
+# Normalise line endings so Windows checkouts don't create noisy diffs.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.onnx binary
+*.pt binary

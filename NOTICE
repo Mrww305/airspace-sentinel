@@ -1,0 +1,30 @@
+AIRSPACE SENTINEL
+Copyright 2026 Sajid Afridi (Mrww305)
+
+This product includes software developed by third parties. The following
+components are used at build time or runtime and remain under their own
+licenses; this NOTICE records them so the provenance of any deployed
+artefact can be reconstructed.
+
+RUNTIME
+  ONNX Runtime                     MIT        https://github.com/microsoft/onnxruntime
+  Fastify                          MIT        https://github.com/fastify/fastify
+
+TRAINING / EVALUATION
+  RF-DETR (rfdetr)                 Apache-2.0 https://github.com/roboflow/rf-detr
+  supervision                      MIT        https://github.com/roboflow/supervision
+  PyTorch                          BSD-3-Clause https://github.com/pytorch/pytorch
+  torchmetrics                     Apache-2.0 https://github.com/Lightning-AI/torchmetrics
+  ONNX / onnxruntime.quantization  MIT / Apache-2.0
+
+DELIBERATELY EXCLUDED
+  Ultralytics YOLO                 AGPL-3.0
+    Not used for shipped weights. AGPL-3.0 obligations would attach to any
+    network-served derivative, which is incompatible with shipping a public,
+    commercial-facing demo. Recorded here rather than omitted.
+
+TRAINING DATA
+  Datasets are not redistributed. See README.md > "Datasets and license
+  provenance" and benchmarks/results.json for per-dataset license fields.
+  Weights derived from research-only datasets are published with the
+  restriction recorded in the model card.

@@ -52,8 +52,19 @@ cannot identify.
 Connect the GitHub repo (`Mrww305/airspace-sentinel`) to the Node app for
 auto-deploy on push to `main`, with root directory `apps/api`.
 
-Build command: `npm ci --omit=dev && npm run typecheck`
-Start command: `npm start`
+Build command: `npm ci && npm run build`
+Start command: `npm start` (runs `node dist/server.js`) · Node 24 · root directory `apps/api`
+
+Two install-time facts that will bite on a fresh clone or a build box with npm 11:
+
+```bash
+npm approve-scripts sharp   # npm 11 blocks install scripts by default; sharp needs its binary
+npm install
+```
+
+`sharp` ships platform binaries as optional dependencies, so do **not** install
+with `--omit=optional` in production — that is only for the local mock-mode
+shortcut.
 
 Then poll the deployment log in hPanel until the build reports **completed**;
 before that, requests return 404/409 while the app is still being provisioned.

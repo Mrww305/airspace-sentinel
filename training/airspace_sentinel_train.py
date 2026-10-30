@@ -265,14 +265,43 @@ smoke = RFDETRNano()
 smoke.train(dataset_dir=str(SMOKE), epochs=CFG.smoke_epochs, batch_size=CFG.batch_size,
             grad_accum_steps=CFG.grad_accum, lr=CFG.lr, output_dir=str(WORK / "smoke_run"))
 
-smoke_onnx = None
-try:
-    p = smoke.export()
-    if p and Path(p).exists():
-        smoke_onnx = Path(p)
-        print("model.export() ->", smoke_onnx)
-except Exception as e:
-    print("[warn] model.export() failed:", repr(e))
+def export_to_onnx(m, out_dir: Path) -> Path | None:
+    """Export and locate the graph regardless of what `export()` returns.
+
+    RF-DETR's `export(output_dir=...)` writes an artifact into a directory; older
+    builds return a path, newer ones return metadata. We therefore diff the
+    directory before/after and fall back to the newest .onnx found.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    before = set(out_dir.rglob("*.onnx"))
+    res = None
+    try:
+        res = m.export(output_dir=str(out_dir))
+    except TypeError:
+        try:
+            res = m.export()
+        except Exception as e:
+            print("[warn] export() failed:", repr(e))
+    except Exception as e:
+        print("[warn] export() failed:", repr(e))
+
+    cands = [p for p in out_dir.rglob("*.onnx") if p not in before]
+    if isinstance(res, (str, Path)):
+        p = Path(str(res))
+        if p.is_file() and p.suffix == ".onnx":
+            cands.append(p)
+        elif p.is_dir():
+            cands.extend(p.rglob("*.onnx"))
+    if not cands:
+        cands = sorted(out_dir.rglob("*.onnx"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not cands:
+        return None
+    best = max(cands, key=lambda p: p.stat().st_mtime)
+    print("exported graph:", best)
+    return best
+
+
+smoke_onnx = export_to_onnx(smoke, WORK / "smoke_export")
 
 if smoke_onnx is None:
     # fallback: raw graph export; post-processing then happens in TypeScript
@@ -323,12 +352,7 @@ model.train(
 # `vision.sajidafridi.com` will execute.
 
 # %%
-onnx_path = None
-try:
-    p = model.export()
-    onnx_path = Path(p) if p else None
-except Exception as e:
-    print("[warn] export() failed:", repr(e))
+onnx_path = export_to_onnx(model, CKPT / "final_export")
 
 if onnx_path is None:
     import torch

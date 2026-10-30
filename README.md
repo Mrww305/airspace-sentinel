@@ -57,7 +57,8 @@ No Python in production. Training is offline; only the exported graph ships.
 
 ```bash
 cd apps/api
-npm install --omit=optional     # skips onnxruntime-node for mock mode
+npm approve-scripts sharp      # npm 11 blocks install scripts; sharp needs its binary
+npm install
 npm run dev
 # → http://localhost:8080/health   { "model": "mock", "ok": true }
 ```
@@ -115,11 +116,18 @@ An AI-governance artefact that violates a dependency license is a contradiction.
 
 - [x] Repository scaffold, response contract, governance modules
 - [x] Training pipeline + export smoke test (notebook)
+- [x] Deployed to `vision.sajidfridi.com` **in mock mode** (honest label: `/health` reports `kind: "mock"`)
 - [ ] Trained weights `sentinel-det-v1` (Kaggle run)
 - [ ] INT8 quantized graph + accuracy delta
 - [ ] Operator console (POC-04 UI)
-- [ ] Deploy to `vision.sajidafridi.com`
 - [ ] Published benchmark table (mAP50, AP-small, bird FPR, ms/frame)
+
+Live endpoints: `GET https://vision.sajidafridi.com/health` · `POST /api/v1/detect` · `GET /api/v1/audit/recent`
+
+> The subdomain currently runs the **mock detector**: the full pipeline (tracking,
+> threat escalation, policy verdict, audit chain) is real, the detections are
+> synthetic and every response says so. It flips to a real model when
+> `SENTINEL_MODEL_PATH` points at trained weights.
 
 ## License
 

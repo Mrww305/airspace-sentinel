@@ -25,9 +25,14 @@ export class AuditChain {
   #memory: AuditRecord[] = [];
 
   constructor(dir: string = cfg.auditDir) {
-    mkdirSync(dir, { recursive: true });
-    this.#file = join(dir, `audit-${new Date().toISOString().slice(0, 10)}.jsonl`);
-    this.#loadTail();
+    try {
+      mkdirSync(dir, { recursive: true });
+      this.#file = join(dir, `audit-${new Date().toISOString().slice(0, 10)}.jsonl`);
+      this.#loadTail();
+    } catch {
+      // Read-only filesystem: keep the in-memory chain rather than failing boot.
+      this.#file = "";
+    }
   }
 
   #loadTail(): void {
@@ -51,7 +56,7 @@ export class AuditChain {
     const seq = this.#seq + 1;
     const hash = createHash("sha256").update(this.#prevHash + stable(payload)).digest("hex");
     const rec: AuditRecord = { seq, ts: new Date().toISOString(), prevHash: this.#prevHash, hash, payload };
-    appendFileSync(this.#file, JSON.stringify(rec) + "\n");
+    if (this.#file !== "") appendFileSync(this.#file, JSON.stringify(rec) + "\n");
     this.#prevHash = hash;
     this.#seq = seq;
     this.#memory.push(rec);

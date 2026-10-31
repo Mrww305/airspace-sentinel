@@ -182,6 +182,50 @@ def yolo_label_for(img: Path):
             return c
     return None
 
+def voc_label_for(img: Path):
+    """Locate a Pascal VOC .xml for an image (dasmehdixtr/drone-dataset-uav layout)."""
+    cands = [
+        img.with_suffix(".xml"),
+        img.parent.parent / "annotations" / (img.stem + ".xml"),
+        img.parent / "annotations" / (img.stem + ".xml"),
+        Path(str(img).replace("/images/", "/annotations/")).with_suffix(".xml"),
+    ]
+    for c in cands:
+        if c.exists():
+            return c
+    return None
+
+# Class names that are explicitly *not* the target. Unknown names are kept: most
+# of these datasets label their only class "drone"/"uav"/"0".
+NEGATIVE_NAMES = {"bird", "person", "people", "car", "human", "airplane", "plane"}
+
+def read_voc(xml: Path, w: int, h: int):
+    """Pascal VOC xmin/ymin/xmax/ymax -> COCO absolute xywh."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.parse(xml).getroot()
+    except ET.ParseError:
+        return []
+    out = []
+    for obj in root.iter("object"):
+        name = (obj.findtext("name") or "").strip().lower()
+        if name in NEGATIVE_NAMES:
+            continue
+        bb = obj.find("bndbox")
+        if bb is None:
+            continue
+        try:
+            x1 = float(bb.findtext("xmin")); y1 = float(bb.findtext("ymin"))
+            x2 = float(bb.findtext("xmax")); y2 = float(bb.findtext("ymax"))
+        except (TypeError, ValueError):
+            continue
+        x1, x2 = max(0.0, min(x1, x2)), min(w, max(x1, x2))
+        y1, y2 = max(0.0, min(y1, y2)), min(h, max(y1, y2))
+        if x2 - x1 < 2 or y2 - y1 < 2:
+            continue
+        out.append([round(x1, 2), round(y1, 2), round(x2 - x1, 2), round(y2 - y1, 2)])
+    return out
+
 def read_yolo(txt: Path, w: int, h: int):
     """YOLO normalised cx,cy,w,h -> COCO absolute xywh. Any class id -> 0 (drone)."""
     out = []
@@ -205,18 +249,24 @@ def image_size(p: Path):
         return im.size
 
 records, skipped_no_label, full_box = [], 0, 0
+per_source = {}
 for key, root in roots.items():
     if key == "drone_vs_bird":
         continue  # eval-only: never trains the detector
+    n_before = len(records)
     for img in find_images(root):
-        txt = yolo_label_for(img)
         w, h = image_size(img)
+        # 1. YOLO sidecar / mirror, 2. Pascal VOC, 3. folder-name classification
+        txt = yolo_label_for(img)
+        xml = voc_label_for(img) if txt is None else None
         if txt is not None:
             boxes = read_yolo(txt, w, h)
+        elif xml is not None:
+            boxes = read_voc(xml, w, h)
         else:
-            # classification-folder layout: folder name is the label
-            name = img.parent.name.lower()
-            boxes = [[0, 0, w, h]] if ("drone" in name or "uav" in name) else []
+            path_tokens = str(img).lower()
+            is_drone = any(t in path_tokens for t in ("drone", "uav", "quadcopter"))
+            boxes = [[0, 0, w, h]] if is_drone else []
             full_box += bool(boxes)
         if not boxes:
             skipped_no_label += 1
@@ -226,18 +276,50 @@ for key, root in roots.items():
             "group": img.parent.name,          # sequence-level split key
             "width": w, "height": h, "boxes": boxes,
         })
+    per_source[key] = len(records) - n_before
+    print(f"{key:<14} images with boxes: {per_source[key]}")
 
 print(f"images with boxes : {len(records)}")
 print(f"images skipped    : {skipped_no_label}")
 print(f"full-frame pseudo-boxes: {full_box}")
-assert len(records) > 500, "Too few labelled images — check the dataset download."
+assert len(records) > 500, (
+    f"Too few labelled images ({len(records)}) — per source: {per_source}. "
+    "A source at 0 means its label format was not recognised."
+)
+
+# Grouping: siblings from one video must not straddle the split. The parent
+# directory is the natural key — but these datasets dump thousands of images
+# into a single folder, which would push a whole source into one split and
+# leave nothing to train on. Oversized groups are chunked into blocks of
+# consecutive frames instead, which keeps frame order intact.
+MAX_GROUP = max(48, int(len(records) * 0.05))
+by_parent = {}
+for r in records:
+    by_parent.setdefault((r["source"], Path(r["file"]).parent), []).append(r)
+
+for (src, parent), rows in by_parent.items():
+    rows.sort(key=lambda r: r["file"])
+    if len(rows) <= MAX_GROUP:
+        for r in rows:
+            r["group"] = f"{src}:{parent.name}"
+    else:
+        for i, r in enumerate(rows):
+            r["group"] = f"{src}:{parent.name}:{i // 24}"
 
 groups = sorted({r["group"] for r in records})
 random.shuffle(groups)
 n_val = max(1, int(len(groups) * CFG.val_frac))
 val_groups = set(groups[:n_val])
 split_of = lambda r: "valid" if r["group"] in val_groups else "train"
-print(f"groups: {len(groups)} -> train {len(groups) - n_val} / valid {n_val}")
+
+train_rows = [r for r in records if split_of(r) == "train"]
+val_rows = [r for r in records if split_of(r) == "valid"]
+print(f"groups: {len(groups)} -> train {len(train_rows)} images / valid {len(val_rows)} images")
+for src in {r["source"] for r in records}:
+    print(f"  {src:<14} train {sum(r['source'] == src for r in train_rows):<6} "
+          f"valid {sum(r['source'] == src for r in val_rows)}")
+assert train_rows, "Empty training split — the grouping collapsed."
+assert val_rows, "Empty validation split — the grouping collapsed."
 
 # %% [markdown]
 # ## 4 · Write the COCO dataset RF-DETR expects

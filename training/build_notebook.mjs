@@ -76,7 +76,7 @@ mkdirSync(KDIR, { recursive: true });
 copyFileSync(DST, new URL("airspace-sentinel-train.ipynb", KDIR));
 
 const meta = {
-  id: "mrww305/airspace-sentinel-train",
+  id: "sajidmrww305afridi/airspace-sentinel-counter-uas-detector",
   title: "AIRSPACE SENTINEL - counter-UAS detector",
   code_file: "airspace-sentinel-train.ipynb",
   language: "python",

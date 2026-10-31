@@ -50,6 +50,10 @@ for (const line of lines) {
 }
 flush();
 
+// nbformat_minor 5 requires a stable id per cell; Kaggle warns without it and
+// nbformat 6 will hard-fail. Deterministic ids also keep diffs stable.
+cells.forEach((c, i) => { c.id = `cell-${String(i).padStart(2, "0")}`; });
+
 const nb = {
   cells,
   metadata: {

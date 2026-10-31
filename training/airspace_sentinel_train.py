@@ -488,6 +488,32 @@ print(f"under 32px : {100*np.mean(np.array(sides) < 32):.1f}%")
 # notebook is wasted compute.
 
 # %%
+# rfdetr 1.11.2 asks Lightning for `estimated_stepping_batches` from inside
+# configure_optimizers(), i.e. before the dataloader has ever been iterated.
+# Lightning's CombinedLoader raises "Please call `iter(combined_loader)` first"
+# in that state, so training dies on every platform, with any Lightning >= 2.5,
+# regardless of data, GPU or batch size. Give len() the meaning it is asking
+# for: the batch count derived from the datasets themselves.
+try:
+    from pytorch_lightning.utilities.combined_loader import CombinedLoader
+
+    if not getattr(CombinedLoader, "_sentinel_len_patch", False):
+        _orig_combined_len = CombinedLoader.__len__
+
+        def _combined_len(self):
+            if getattr(self, "_iterator", None) is not None:
+                return _orig_combined_len(self)
+            try:
+                return self._dataset_length()
+            except Exception:
+                return 0
+
+        CombinedLoader.__len__ = _combined_len
+        CombinedLoader._sentinel_len_patch = True
+        print("patched CombinedLoader.__len__ for pre-iteration access")
+except Exception as e:
+    print("[warn] CombinedLoader patch skipped:", repr(e))
+
 from rfdetr import RFDETRNano
 
 def build_smoke_dir(src: Path, dst: Path, n: int):

@@ -6,7 +6,7 @@
 # hours, then evaluates the number that decides deployability: **false positives
 # against birds**.
 #
-# Run this on Kaggle (T4 x1, ~2 h). It is also a runnable script:
+# Runs on Kaggle (T4, ~2 h) or Google Colab (free T4). Also a plain script:
 # `python airspace_sentinel_train.py`
 #
 # Output artefacts:
@@ -24,7 +24,12 @@
 # Installs work identically in a notebook and as a bare script (no IPython magic).
 import socket, subprocess, sys
 
-PKGS = ["rfdetr[train]==1.11.2", "kagglehub", "onnxruntime", "onnx", "torchmetrics", "supervision>=0.29.0"]
+PKGS = ["rfdetr[train]==1.11.2", "kagglehub", "kaggle", "onnxruntime", "onnx",
+        "torchmetrics", "supervision>=0.29.0",
+        # rfdetr 1.11.2 calls len(CombinedLoader) during setup; lightning 2.6
+        # raises "Please call iter(combined_loader) first" and the train dies
+        # before the first batch.
+        "pytorch-lightning<2.6"]
 
 
 def has_internet(host: str = "pypi.org", timeout: float = 5.0) -> bool:
@@ -67,7 +72,30 @@ warnings.filterwarnings("ignore")
 SEED = 305
 random.seed(SEED); np.random.seed(SEED)
 
-WORK = Path("/kaggle/working") if Path("/kaggle/working").exists() else Path.cwd() / "work"
+IN_COLAB = "google.colab" in sys.modules
+
+# Colab has no attached datasets, and the three sources are public Kaggle
+# datasets, so the session needs an API token. Colab Secrets (key icon in the
+# sidebar) is the right place: it stays out of the notebook and out of git.
+if IN_COLAB and not os.environ.get("KAGGLE_API_TOKEN"):
+    try:
+        from google.colab import userdata
+        os.environ["KAGGLE_API_TOKEN"] = userdata.get("KAGGLE_API_TOKEN")
+        print("kaggle token: loaded from Colab Secrets")
+    except Exception as e:
+        raise RuntimeError(
+            "No Kaggle credentials. In Colab, click the key icon in the left\n"
+            "sidebar, add a secret named KAGGLE_API_TOKEN with your KGAT_… token,\n"
+            "and enable notebook access for it. The three datasets are public, so\n"
+            "no account data beyond the token is needed."
+        ) from e
+
+if Path("/kaggle/working").exists():
+    WORK = Path("/kaggle/working")
+elif IN_COLAB:
+    WORK = Path("/content/airspace-sentinel")
+else:
+    WORK = Path.cwd() / "work"
 DATA = WORK / "data"          # unified dataset root (COCO layout)
 OUT  = WORK / "runs"
 CKPT = WORK / "weights"
@@ -97,7 +125,10 @@ print("torch", torch.__version__, "| cuda", torch.cuda.is_available(),
 if os.environ.get("SENTINEL_ALLOW_CPU") == "1":
     print("[warn] SENTINEL_ALLOW_CPU=1 — smoke path only, full training is not viable on CPU")
 else:
-    assert torch.cuda.is_available(), "Enable a GPU accelerator in Kaggle settings (T4 x1 is enough)."
+    assert torch.cuda.is_available(), (
+        "No GPU. Kaggle: Settings -> Accelerator -> GPU (requires a phone-verified\n"
+        "account). Colab: Runtime -> Change runtime type -> T4 GPU."
+    )
 
 # %% [markdown]
 # ## 2 · Datasets
@@ -115,6 +146,23 @@ SOURCES = {
     "yolo_muki":     "muki2003/yolo-drone-detection-dataset",
     "drone_vs_bird": "muhammadsaoodsarwar/drone-vs-bird",
 }
+
+
+def kaggle_cli_download(slug: str, dest: Path):
+    """Fallback for environments where kagglehub's credential handling fails.
+
+    Colab is the case that matters: kagglehub predates access tokens and looks
+    for username/key, while the CLI understands KAGGLE_API_TOKEN.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.check_call(
+            ["kaggle", "datasets", "download", "-d", slug, "-p", str(dest), "--unzip", "-q"]
+        )
+    except Exception as e:
+        print(f"[warn] CLI download failed for {slug}: {e!r}")
+        return None
+    return dest
 
 
 def resolve_roots(input_root: Path = Path("/kaggle/input")) -> dict:
@@ -155,13 +203,16 @@ def resolve_roots(input_root: Path = Path("/kaggle/input")) -> dict:
         if key in found:
             out[key] = found[key]
         elif HAS_INTERNET:
+            path = None
             try:
                 import kagglehub
-            except ImportError:
-                print(f"[warn] {key}: not attached and kagglehub is not installed")
-                continue
-            out[key] = Path(kagglehub.dataset_download(slug))
-            print(f"{key:<14} downloaded {out[key]}")
+                path = Path(kagglehub.dataset_download(slug))
+            except Exception as e:
+                print(f"[warn] kagglehub: {type(e).__name__} -> falling back to the kaggle CLI")
+                path = kaggle_cli_download(slug, input_root / slug.split("/")[-1])
+            if path:
+                out[key] = path
+                print(f"{key:<14} downloaded {path}")
         else:
             print(f"[warn] {key}: not attached and no internet")
     return out
@@ -316,19 +367,21 @@ def dhash(p: Path, size: int = 8) -> int:
 
 hashes = np.array([dhash(Path(r["file"])) for r in records], dtype=np.uint64)
 parents = [Path(r["file"]).parent for r in records]
+shapes = [(r["width"], r["height"]) for r in records]
 
-# Compare only across different directories. Within one directory consecutive
-# frames are genuinely distinct moments (measured: median 19.5 bits apart), and
-# collapsing them would throw away most of a video. Across directories, true
-# twins sit at 0 bits and the nearest non-twin at 8, so <=2 is unambiguous.
+# Compare only across different directories: within one directory consecutive
+# frames are distinct moments (measured: median 19.5 bits apart) and must be
+# kept. Across directories a true twin is bit-identical (0 bits) and the same
+# pixel dimensions; the nearest non-twin sits at 8 bits. Requiring an exact
+# match plus identical dimensions avoids collapsing near-identical sky frames.
 kept_idx, dropped = [], 0
 for i in range(len(hashes)):
     if kept_idx:
-        cand = [j for j in kept_idx if parents[j] != parents[i]]
+        cand = [j for j in kept_idx
+                if parents[j] != parents[i] and shapes[j] == shapes[i]]
         if cand:
-            diff = np.bitwise_xor(hashes[cand], hashes[i])
-            bits = np.unpackbits(diff.view(np.uint8).reshape(-1, 8), axis=1).sum(axis=1)
-            if (bits <= 2).any():
+            equal = hashes[cand] == hashes[i]
+            if equal.any():
                 dropped += 1
                 continue
     kept_idx.append(i)
@@ -814,10 +867,24 @@ print("\nArtefacts:", [p.name for p in CKPT.glob("*.onnx")])
 # ## 12 · Package for the API
 #
 # Download `sentinel-det-v1.onnx` (and the INT8 variant) plus `metrics.json` and
-# `model_card.md`, then publish as a Kaggle Dataset so the API build can pull it
-# by reference instead of committing binaries.
+# `model_card.md`. On Colab this is zipped and offered as a single download; on
+# Kaggle they land in `/kaggle/working` as notebook output.
 
 # %%
 for f in [final_onnx, int8_path, WORK / "metrics.json", WORK / "model_card.md"]:
     if f and Path(f).exists():
         print(f"{Path(f).name:<34} {Path(f).stat().st_size/1024:9.1f} KB")
+
+if IN_COLAB:
+    import zipfile
+    bundle = WORK / "airspace-sentinel-model.zip"
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in [final_onnx, int8_path, WORK / "metrics.json", WORK / "model_card.md"]:
+            if f and Path(f).exists():
+                z.write(f, Path(f).name)
+    print(f"bundle: {bundle} ({bundle.stat().st_size/1024:.0f} KB)")
+    try:
+        from google.colab import files
+        files.download(str(bundle))
+    except Exception as e:
+        print("[warn] automatic download failed — use the Colab file browser:", repr(e))

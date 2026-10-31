@@ -96,3 +96,20 @@ const meta = {
 };
 writeFileSync(new URL("kernel-metadata.json", KDIR), JSON.stringify(meta, null, 2) + "\n");
 console.log("staged kaggle/ (metadata + notebook) -> push with: kaggle kernels push -p training/kaggle");
+
+/**
+ * Colab staging: this copy is committed so it can be opened straight from
+ * GitHub with
+ *   https://colab.research.google.com/github/<owner>/<repo>/blob/main/training/colab/airspace-sentinel-colab.ipynb
+ * Colab ignores the Kaggle metadata block and reads "accelerator".
+ */
+const CDIR = new URL("./colab/", import.meta.url);
+mkdirSync(CDIR, { recursive: true });
+
+const colab = JSON.parse(JSON.stringify(nb));
+delete colab.metadata.kaggle;
+colab.metadata.accelerator = "GPU";
+colab.metadata.colab = { name: "airspace-sentinel-colab.ipynb", provenance: [], toc_visible: true };
+
+writeFileSync(new URL("airspace-sentinel-colab.ipynb", CDIR), JSON.stringify(colab, null, 1) + "\n");
+console.log("wrote colab/airspace-sentinel-colab.ipynb -> open from GitHub or opencolab link");

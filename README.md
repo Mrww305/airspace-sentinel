@@ -74,14 +74,18 @@ Mock mode returns synthetic tracks so the whole pipeline — validation, trackin
 
 ```bash
 cd training
-pip install -r requirements.txt
-# open airspace-sentinel-train.ipynb on Kaggle (T4 x1 is enough)
+node build_notebook.mjs
 ```
 
-The notebook is generated from `airspace_sentinel_train.py` (jupytext-style `# %%` cells):
+Then either:
+
+- **Colab (works today):** <https://colab.research.google.com/github/Mrww305/airspace-sentinel/blob/main/training/colab/airspace-sentinel-colab.ipynb> — set the runtime to T4 and add a `KAGGLE_API_TOKEN` secret. Details in [`training/colab/README.md`](training/colab/README.md).
+- **Kaggle:** `kaggle kernels push -p training/kaggle`. Currently blocked: the account is not phone-verified, so Kaggle allocates neither network nor GPU. See [`training/kaggle/README.md`](training/kaggle/README.md).
+
+The notebook is generated from `airspace_sentinel_train.py` (jupytext-style `# %%` cells), so the notebook that runs is the one in git:
 
 ```bash
-node build_notebook.mjs      # regenerates airspace-sentinel-train.ipynb
+node build_notebook.mjs      # regenerates the Kaggle + Colab notebooks
 ```
 
 Pipeline: dataset unification → COCO conversion → **ONNX export smoke test on 1 epoch** → full train → eval → INT8 quantize → model card.

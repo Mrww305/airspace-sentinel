@@ -94,7 +94,10 @@ CFG = Cfg()
 import torch
 print("torch", torch.__version__, "| cuda", torch.cuda.is_available(),
       "| device", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu")
-assert torch.cuda.is_available(), "Enable a GPU accelerator in Kaggle settings (T4 x1 is enough)."
+if os.environ.get("SENTINEL_ALLOW_CPU") == "1":
+    print("[warn] SENTINEL_ALLOW_CPU=1 — smoke path only, full training is not viable on CPU")
+else:
+    assert torch.cuda.is_available(), "Enable a GPU accelerator in Kaggle settings (T4 x1 is enough)."
 
 # %% [markdown]
 # ## 2 · Datasets
@@ -114,37 +117,49 @@ SOURCES = {
 }
 
 
-def resolve_roots() -> dict:
+def resolve_roots(input_root: Path = Path("/kaggle/input")) -> dict:
     """Attached datasets first, network second.
 
     kernel-metadata.json attaches all three, so they appear under /kaggle/input
     even when the kernel has no internet. Downloading them again through
     kagglehub would be slower and fails outright on an unverified account.
+
+    The mount layout is not /kaggle/input/<slug>: current Kaggle images use
+    /kaggle/input/datasets/<owner>/<slug>, so the search is recursive and
+    matches on the slug's last path component.
     """
-    attached, out = {}, {}
-    if Path("/kaggle/input").exists():
-        for d in Path("/kaggle/input").iterdir():
-            if d.is_dir():
-                attached[d.name.lower()] = d
+    out, found = {}, {}
 
-    def find(*needles):
-        for name, path in attached.items():
-            if any(n in name for n in needles):
-                return path
-        return None
+    def walk(root: Path, depth: int = 0):
+        yield root
+        if depth >= 4:
+            return
+        try:
+            children = [c for c in root.iterdir() if c.is_dir()]
+        except OSError:
+            return
+        for c in children:
+            yield from walk(c, depth + 1)
 
-    keys = {
-        "uav_dasmehdi": ("drone-dataset-uav", "uav"),
-        "yolo_muki": ("yolo-drone", "muki"),
-        "drone_vs_bird": ("drone-vs-bird", "bird"),
-    }
+    input_root = Path(input_root)
+    if input_root.exists():
+        dirs = list(walk(input_root))
+        for key, slug in SOURCES.items():
+            needle = slug.split("/")[-1].lower()
+            hits = [d for d in dirs if d.name.lower() == needle or needle in d.name.lower()]
+            if hits:
+                found[key] = min(hits, key=lambda p: len(p.parts))
+                print(f"{key:<14} attached  {found[key]}")
+
     for key, slug in SOURCES.items():
-        hit = find(*keys[key])
-        if hit:
-            out[key] = hit
-            print(f"{key:<14} attached  {hit}")
+        if key in found:
+            out[key] = found[key]
         elif HAS_INTERNET:
-            import kagglehub
+            try:
+                import kagglehub
+            except ImportError:
+                print(f"[warn] {key}: not attached and kagglehub is not installed")
+                continue
             out[key] = Path(kagglehub.dataset_download(slug))
             print(f"{key:<14} downloaded {out[key]}")
         else:
@@ -152,8 +167,12 @@ def resolve_roots() -> dict:
     return out
 
 
-roots = resolve_roots()
-assert roots, "No datasets available: attach them in kernel-metadata.json or enable internet."
+_local_root = os.environ.get("SENTINEL_DATA_ROOT")
+roots = resolve_roots(Path(_local_root)) if _local_root else resolve_roots()
+assert roots, (
+    "No datasets available. Attached datasets mount under /kaggle/input; "
+    "found none matching the three slugs in SOURCES."
+)
 
 # %% [markdown]
 # ## 3 · Unify to COCO
@@ -282,6 +301,31 @@ for key, root in roots.items():
 print(f"images with boxes : {len(records)}")
 print(f"images skipped    : {skipped_no_label}")
 print(f"full-frame pseudo-boxes: {full_box}")
+
+# The UAV dataset ships the same frames twice: once as PNG+XML, once as a
+# re-encoded YOLO JPEG. The files differ byte-wise and even in name, so a
+# content hash misses them — and a split that puts a frame in train and its
+# re-render in valid inflates every metric. Dedupe on a perceptual hash.
+def dhash(p: Path, size: int = 8) -> int:
+    from PIL import Image
+    with Image.open(p) as im:
+        g = im.convert("L").resize((size + 1, size), Image.LANCZOS)
+        px = np.asarray(g, dtype=np.int16)
+    return int("".join("1" if b else "0" for b in (px[:, 1:] > px[:, :-1]).flatten()), 2)
+
+
+hashes = np.array([dhash(Path(r["file"])) for r in records], dtype=np.uint64)
+keep_idx, dropped = [], 0
+for i in range(len(hashes)):
+    if keep_idx:
+        diff = np.bitwise_xor(hashes[keep_idx], hashes[i])
+        bits = np.unpackbits(diff.view(np.uint8).reshape(-1, 8), axis=1).sum(axis=1)
+        if (bits <= 4).any():          # <=4 differing bits of 64 == same frame
+            dropped += 1
+            continue
+    keep_idx.append(i)
+records = [records[i] for i in keep_idx]
+print(f"duplicate frames dropped: {dropped} -> {len(records)} unique")
 assert len(records) > 500, (
     f"Too few labelled images ({len(records)}) — per source: {per_source}. "
     "A source at 0 means its label format was not recognised."
@@ -450,7 +494,8 @@ if smoke_onnx is None:
     # fallback: raw graph export; post-processing then happens in TypeScript
     try:
         import torch
-        dummy = torch.randn(1, 3, CFG.resolution, CFG.resolution).cuda()
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dummy = torch.randn(1, 3, CFG.resolution, CFG.resolution).to(device)
         smoke.model.eval()
         smoke_onnx = CKPT / "smoke_raw.onnx"
         torch.onnx.export(smoke.model, dummy, str(smoke_onnx),
@@ -472,6 +517,10 @@ t0 = time.perf_counter()
 outs = sess.run(None, {inp.name: dummy_np})
 dt = (time.perf_counter() - t0) * 1000
 print("GATE PASSED — onnxruntime CPU:", f"{dt:.1f} ms", "| outputs:", [o.shape for o in outs])
+
+if os.environ.get("SENTINEL_STOP_AFTER_GATE") == "1":
+    print("SENTINEL_STOP_AFTER_GATE=1 — stopped after the gate, no full training run.")
+    raise SystemExit(0)
 
 # %% [markdown]
 # ## 7 · Full training run

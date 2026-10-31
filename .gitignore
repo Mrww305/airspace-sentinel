@@ -30,6 +30,11 @@ kaggle-datasets/
 # audit output
 audit/*.jsonl
 
+# local training sandbox (CPU gate runs)
+.venv-gate/
+.cache-gate/
+work/
+
 # editor / OS
 .vscode/
 .idea/

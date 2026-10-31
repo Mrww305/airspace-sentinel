@@ -22,10 +22,39 @@
 
 # %%
 # Installs work identically in a notebook and as a bare script (no IPython magic).
-import subprocess, sys
+import socket, subprocess, sys
 
 PKGS = ["rfdetr==1.11.2", "kagglehub", "onnxruntime", "onnx", "torchmetrics", "supervision>=0.29.0"]
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *PKGS])
+
+
+def has_internet(host: str = "pypi.org", timeout: float = 5.0) -> bool:
+    prev = socket.getdefaulttimeout()
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.gethostbyname(host)
+        return True
+    except OSError:
+        return False
+    finally:
+        socket.setdefaulttimeout(prev)
+
+
+HAS_INTERNET = has_internet()
+print("internet:", "available" if HAS_INTERNET else "BLOCKED")
+
+try:
+    import rfdetr  # noqa: F401
+    print("rfdetr already present — skipping install")
+except ImportError:
+    if not HAS_INTERNET:
+        raise RuntimeError(
+            "No internet in this kernel, so rfdetr cannot be installed.\n\n"
+            "Kaggle silently disables internet (and GPU) for accounts that are not\n"
+            "phone-verified, even when enable_internet is set in kernel-metadata.json.\n\n"
+            "Fix: kaggle.com -> Settings -> Phone Verification, then re-push this kernel.\n"
+            "Nothing is wrong with the code: the pip failure below is a DNS failure."
+        )
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *PKGS])
 
 import json, os, random, shutil, hashlib, time, warnings
 from dataclasses import dataclass
@@ -78,21 +107,53 @@ assert torch.cuda.is_available(), "Enable a GPU accelerator in Kaggle settings (
 # - `muhammadsaoodsarwar/drone-vs-bird` — the **evaluation-only** set that gives us a bird FPR
 
 # %%
-import kagglehub
-
 SOURCES = {
     "uav_dasmehdi":  "dasmehdixtr/drone-dataset-uav",
     "yolo_muki":     "muki2003/yolo-drone-detection-dataset",
     "drone_vs_bird": "muhammadsaoodsarwar/drone-vs-bird",
 }
 
-roots = {}
-for key, slug in SOURCES.items():
-    try:
-        roots[key] = Path(kagglehub.dataset_download(slug))
-        print(f"{key:<14} {slug:<42} -> {roots[key]}")
-    except Exception as e:
-        print(f"[warn] {key}: {e}")
+
+def resolve_roots() -> dict:
+    """Attached datasets first, network second.
+
+    kernel-metadata.json attaches all three, so they appear under /kaggle/input
+    even when the kernel has no internet. Downloading them again through
+    kagglehub would be slower and fails outright on an unverified account.
+    """
+    attached, out = {}, {}
+    if Path("/kaggle/input").exists():
+        for d in Path("/kaggle/input").iterdir():
+            if d.is_dir():
+                attached[d.name.lower()] = d
+
+    def find(*needles):
+        for name, path in attached.items():
+            if any(n in name for n in needles):
+                return path
+        return None
+
+    keys = {
+        "uav_dasmehdi": ("drone-dataset-uav", "uav"),
+        "yolo_muki": ("yolo-drone", "muki"),
+        "drone_vs_bird": ("drone-vs-bird", "bird"),
+    }
+    for key, slug in SOURCES.items():
+        hit = find(*keys[key])
+        if hit:
+            out[key] = hit
+            print(f"{key:<14} attached  {hit}")
+        elif HAS_INTERNET:
+            import kagglehub
+            out[key] = Path(kagglehub.dataset_download(slug))
+            print(f"{key:<14} downloaded {out[key]}")
+        else:
+            print(f"[warn] {key}: not attached and no internet")
+    return out
+
+
+roots = resolve_roots()
+assert roots, "No datasets available: attach them in kernel-metadata.json or enable internet."
 
 # %% [markdown]
 # ## 3 · Unify to COCO

@@ -437,7 +437,19 @@ def evaluate(split: str, limit: int | None = None):
               "labels": torch.zeros(len(gb), dtype=torch.int64)}],
         )
     m = metric.compute()
-    return {k: float(v) for k, v in m.items() if isinstance(v, (int, float))}, lat
+    # torchmetrics returns torch.Tensor (and per-class arrays), so isinstance(v, float)
+    # silently dropped every metric and produced an empty results block.
+    scalars = {}
+    for k, v in m.items():
+        try:
+            if hasattr(v, "numel") and v.numel() != 1:
+                continue
+            fv = float(v)
+            if np.isfinite(fv):
+                scalars[k] = fv
+        except Exception:
+            continue
+    return scalars, lat
 
 metrics, lat = evaluate("valid", limit=300)
 print({k: round(v, 4) for k, v in metrics.items() if k.startswith("map")})

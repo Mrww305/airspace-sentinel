@@ -20,7 +20,7 @@ datasets/
 runs/
 wandb/
 *.log
-kaggle/
+kaggle-datasets/
 
 # env & secrets
 .env

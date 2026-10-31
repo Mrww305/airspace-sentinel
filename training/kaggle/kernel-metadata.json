@@ -1,0 +1,19 @@
+{
+  "id": "mrww305/airspace-sentinel-train",
+  "title": "AIRSPACE SENTINEL - counter-UAS detector",
+  "code_file": "airspace-sentinel-train.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [
+    "dasmehdixtr/drone-dataset-uav",
+    "muki2003/yolo-drone-detection-dataset",
+    "muhammadsaoodsarwar/drone-vs-bird"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": [],
+  "docker_image": "gcr.io/kaggle-gpu-images/python"
+}

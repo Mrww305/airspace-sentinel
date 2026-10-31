@@ -76,8 +76,12 @@ curl -s https://vision.sajidafridi.com/health | jq
 # expect: ok true, model.kind "onnx", audit.ok true
 
 curl -s -X POST https://vision.sajidafridi.com/api/v1/detect \
-  -F "frame=@docs/samples/uav.jpg" | jq '.threat, .policy'
+  -F "frame=@<a-real-drone-frame>.jpg" | jq '.threat, .policy'
 ```
+
+Use a genuine frame from your own footage for the check — the mock detector is
+deterministic per input, so a synthetic grey rectangle will return synthetic
+tracks and tell you nothing about model behaviour.
 
 Then check `kind` is `onnx` — if it says `mock`, `SENTINEL_MODEL_PATH` did not
 resolve and the demo is synthetic.

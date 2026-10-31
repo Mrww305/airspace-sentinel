@@ -63,3 +63,36 @@ const nb = {
 
 writeFileSync(DST, JSON.stringify(nb, null, 1) + "\n");
 console.log(`wrote ${cells.length} cells (${cells.filter((c) => c.cell_type === "markdown").length} md) -> airspace-sentinel-train.ipynb`);
+
+/**
+ * Kaggle CLI staging: `kaggle kernels push -p training/kaggle` uploads whatever
+ * sits next to kernel-metadata.json, so the notebook is copied in under the
+ * name the metadata expects.
+ */
+import { mkdirSync, copyFileSync } from "node:fs";
+
+const KDIR = new URL("./kaggle/", import.meta.url);
+mkdirSync(KDIR, { recursive: true });
+copyFileSync(DST, new URL("airspace-sentinel-train.ipynb", KDIR));
+
+const meta = {
+  id: "mrww305/airspace-sentinel-train",
+  title: "AIRSPACE SENTINEL - counter-UAS detector",
+  code_file: "airspace-sentinel-train.ipynb",
+  language: "python",
+  kernel_type: "notebook",
+  is_private: true,
+  enable_gpu: true,
+  enable_internet: true,
+  dataset_sources: [
+    "dasmehdixtr/drone-dataset-uav",
+    "muki2003/yolo-drone-detection-dataset",
+    "muhammadsaoodsarwar/drone-vs-bird",
+  ],
+  competition_sources: [],
+  kernel_sources: [],
+  model_sources: [],
+  docker_image: "gcr.io/kaggle-gpu-images/python",
+};
+writeFileSync(new URL("kernel-metadata.json", KDIR), JSON.stringify(meta, null, 2) + "\n");
+console.log("staged kaggle/ (metadata + notebook) -> push with: kaggle kernels push -p training/kaggle");

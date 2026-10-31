@@ -24,7 +24,7 @@
 # Installs work identically in a notebook and as a bare script (no IPython magic).
 import socket, subprocess, sys
 
-PKGS = ["rfdetr==1.11.2", "kagglehub", "onnxruntime", "onnx", "torchmetrics", "supervision>=0.29.0"]
+PKGS = ["rfdetr[train]==1.11.2", "kagglehub", "onnxruntime", "onnx", "torchmetrics", "supervision>=0.29.0"]
 
 
 def has_internet(host: str = "pypi.org", timeout: float = 5.0) -> bool:
@@ -315,16 +315,24 @@ def dhash(p: Path, size: int = 8) -> int:
 
 
 hashes = np.array([dhash(Path(r["file"])) for r in records], dtype=np.uint64)
-keep_idx, dropped = [], 0
+parents = [Path(r["file"]).parent for r in records]
+
+# Compare only across different directories. Within one directory consecutive
+# frames are genuinely distinct moments (measured: median 19.5 bits apart), and
+# collapsing them would throw away most of a video. Across directories, true
+# twins sit at 0 bits and the nearest non-twin at 8, so <=2 is unambiguous.
+kept_idx, dropped = [], 0
 for i in range(len(hashes)):
-    if keep_idx:
-        diff = np.bitwise_xor(hashes[keep_idx], hashes[i])
-        bits = np.unpackbits(diff.view(np.uint8).reshape(-1, 8), axis=1).sum(axis=1)
-        if (bits <= 4).any():          # <=4 differing bits of 64 == same frame
-            dropped += 1
-            continue
-    keep_idx.append(i)
-records = [records[i] for i in keep_idx]
+    if kept_idx:
+        cand = [j for j in kept_idx if parents[j] != parents[i]]
+        if cand:
+            diff = np.bitwise_xor(hashes[cand], hashes[i])
+            bits = np.unpackbits(diff.view(np.uint8).reshape(-1, 8), axis=1).sum(axis=1)
+            if (bits <= 2).any():
+                dropped += 1
+                continue
+    kept_idx.append(i)
+records = [records[i] for i in kept_idx]
 print(f"duplicate frames dropped: {dropped} -> {len(records)} unique")
 assert len(records) > 500, (
     f"Too few labelled images ({len(records)}) — per source: {per_source}. "
